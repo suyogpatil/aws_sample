@@ -1,0 +1,320 @@
+{
+  "Description": "cloudformation dummy template which creates VPC , OpsWorks stack call test, and single layer called etcd and confd setting",
+  "Parameters": {
+    "KeyPair": {}
+  },
+  "Mappings": {},
+  "Resources": {
+    "MyStack": {
+      "Type": "AWS::OpsWorks::Stack",
+      "Properties": {
+        "Name": {
+          "Ref": "AWS::StackName"
+        },
+        "ServiceRoleArn": {
+          "Fn::GetAtt": [
+            "OpsWorksServiceRole",
+            "Arn"
+          ]
+        },
+        "DefaultInstanceProfileArn": {
+          "Fn::GetAtt": [
+            "OpsWorksInstanceProfile",
+            "Arn"
+          ]
+        },
+        "VpcId": {
+          "Ref": "VPC"
+        },
+        "DefaultSubnetId": {
+          "Ref": "PrivateSubnet"
+        }
+      }
+    },
+    "OpsWorksServiceRole": {
+      "Type": "AWS::IAM::Role",
+      "Properties": {}
+    },
+    "OpsWorksInstanceProfile": {
+      "Type": "AWS::IAM::Role",
+      "Properties": {}
+    },
+    "etcd": {
+      "Type": "AWS::OpsWorks::Layer",
+      "Properties": {
+        "StackId": {
+          "Ref": "MyStack"
+        },
+        "Name": "etcd_app",
+        "Type": "custom",
+        "Shortname": "etcd_app",
+        "EnableAutoHealing": "true",
+        "AutoAssignElasticIps": "false",
+        "AutoAssignPublicIps": "true"
+      }
+    },
+    "VPC": {
+      "Type": "AWS::EC2::VPC",
+      "Properties": {}
+    },
+    "Ec2Instance": {
+      "Metadata": {
+        "AWS::CloudFormation::Init": {
+          "configSets": {
+            "etcd_confd_setting": [
+              "install_cfn",
+              "install_chefdk",
+              "install_chef",
+              "install_etcd",
+              "install_confd",
+              "config_setting"
+            ]
+          },
+          "install_cfn": {
+            "files": {
+              "/etc/cfn/cfn-hup.conf": {
+                "content": {
+                  "Fn::Join": [
+                    "",
+                    [
+                      "[main]\n",
+                      "stack=",
+                      {
+                        "Ref": "AWS::StackId"
+                      },
+                      "\n",
+                      "region=",
+                      {
+                        "Ref": "AWS::Region"
+                      },
+                      "\n"
+                    ]
+                  ]
+                },
+                "mode": "000400",
+                "owner": "root",
+                "group": "root"
+              },
+              "/etc/cfn/hooks.d/cfn-auto-reloader.conf": {
+                "content": {
+                  "Fn::Join": [
+                    "",
+                    [
+                      "[cfn-auto-reloader-hook]\n",
+                      "triggers=post.update\n",
+                      "path=Resources.LaunchConfig.Metadata.AWS::CloudFormation::Init\n",
+                      "action=/opt/aws/bin/cfn-init -v ",
+                      "         --stack ",
+                      {
+                        "Ref": "AWS::StackName"
+                      },
+                      "         --resource Ec2Instance ",
+                      "         --configsets etcd_confd_setting ",
+                      "         --region ",
+                      {
+                        "Ref": "AWS::Region"
+                      },
+                      "\n"
+                    ]
+                  ]
+                },
+                "mode": "000400",
+                "owner": "root",
+                "group": "root"
+              }
+            },
+            "services": {
+              "sysvinit": {
+                "cfn-hup": {
+                  "enabled": "true",
+                  "ensureRunning": "true",
+                  "files": [
+                    "/etc/cfn/cfn-hup.conf",
+                    "/etc/cfn/hooks.d/cfn-auto-reloader.conf"
+                  ]
+                }
+              }
+            }
+          },
+          "install_chef": {
+            "sources": {
+              "/var/chef/chef-repo": "http://github.com/opscode/chef-repo/tarball/master"
+            },
+            "files": {
+              "/tmp/install.sh": {
+                "source": "https://www.opscode.com/chef/install.sh",
+                "mode": "000400",
+                "owner": "root",
+                "group": "root"
+              },
+              "/var/chef/chef-repo/.chef/knife.rb": {
+                "content": {
+                  "Fn::Join": [
+                    "",
+                    [
+                      "cookbook_path [ '/var/chef/chef-repo/cookbooks' ]\n",
+                      "node_path [ '/var/chef/chef-repo/nodes' ]\n"
+                    ]
+                  ]
+                },
+                "mode": "000400",
+                "owner": "root",
+                "group": "root"
+              },
+              "/var/chef/chef-repo/.chef/client.rb": {
+                "content": {
+                  "Fn::Join": [
+                    "",
+                    [
+                      "cookbook_path [ '/var/chef/chef-repo/cookbooks' ]\n",
+                      "node_path [ '/var/chef/chef-repo/nodes' ]\n"
+                    ]
+                  ]
+                },
+                "mode": "000400",
+                "owner": "root",
+                "group": "root"
+              }
+            },
+            "commands": {
+              "01_make_chef_readable": {
+                "command": "chmod +rx /var/chef"
+              },
+              "02_install_chef": {
+                "command": "bash /tmp/install.sh",
+                "cwd": "/var/chef"
+              },
+              "03_create_node_list": {
+                "command": "chef-client -z -c /var/chef/chef-repo/.chef/client.rb",
+                "cwd": "/var/chef/chef-repo",
+                "env": {
+                  "HOME": "/var/chef"
+                }
+              }
+            }
+          },
+          "install_chefdk": {
+            "packages": {
+              "rpm": {
+                "chefdk": "https://opscode-omnibus-packages.s3.amazonaws.com/el/6/x86_64/chefdk-0.2.0-2.el6.x86_64.rpm"
+              }
+            }
+          },
+          "install_etcd": {
+            "files": {
+              "/var/chef/chef-repo/.chef/knife.rb": {
+                "content": {
+                  "Fn::Join": [
+                    "",
+                    [
+                      "cookbook_path [ '/var/chef/chef-repo/cookbooks/etcd/berks-cookbooks' ]\n",
+                      "node_path [ '/var/chef/chef-repo/nodes' ]\n"
+                    ]
+                  ]
+                },
+                "mode": "000400",
+                "owner": "root",
+                "group": "root"
+              },
+              "/var/chef/chef-repo/.chef/client.rb": {
+                "content": {
+                  "Fn::Join": [
+                    "",
+                    [
+                      "cookbook_path [ '/var/chef/chef-repo/cookbooks/etcd/berks-cookbooks' ]\n",
+                      "node_path [ '/var/chef/chef-repo/nodes' ]\n"
+                    ]
+                  ]
+                },
+                "mode": "000400",
+                "owner": "root",
+                "group": "root"
+              }
+            },
+            "commands": {
+              "01_get_cookbook": {
+                "command": "knife cookbook site download etcd",
+                "cwd": "/var/chef/chef-repo",
+                "env": {
+                  "HOME": "/var/chef"
+                }
+              },
+              "02_unpack_cookbook": {
+                "command": "tar xvfz /var/chef/chef-repo/etcd*",
+                "cwd": "/var/chef/chef-repo/cookbooks"
+              },
+              "03_init_berkshelf": {
+                "command": "berks init /var/chef/chef-repo/cookbooks/etcd --skip-vagrant --skip-git",
+                "cwd": "/var/chef/chef-repo/cookbooks/etcd",
+                "env": {
+                  "HOME": "/var/chef"
+                }
+              },
+              "04_vendorize_berkshelf": {
+                "command": "berks vendor",
+                "cwd": "/var/chef/chef-repo/cookbooks/etcd",
+                "env": {
+                  "HOME": "/var/chef"
+                }
+              },
+              "05_configure_node_run_list": {
+                "command": "knife node run_list add -z `knife node list -z` recipe[etcd]",
+                "cwd": "/var/chef/chef-repo",
+                "env": {
+                  "HOME": "/var/chef"
+                }
+              },
+              "06_run_chef_client": {
+                "command": "chef-client -z -c /var/chef/chef-repo/.chef/client.rb",
+                "cwd": "/var/chef/chef-repo",
+                "env": {
+                  "HOME": "/var/chef"
+                }
+              }
+            }
+          },
+          "install_confd": {
+            "commands": {
+              "01_get_confd": {
+                "command": "wget https://github.com/kelseyhightower/confd/archive/v0.12.0-alpha3.tar.gz && tar -xf v0.12.0-alpha3.tar.gz",
+                "cwd": "/usr/local/src"
+              },
+              "02_build_confd": {
+                "command": "./build",
+                "cwd": "/usr/local/src/confd-0.12.0-alpha3"
+              },
+              "03_install_confd": {
+                "command": "./install",
+                "cwd": "/usr/local/src/confd-0.12.0-alpha3"
+              }
+            }
+          },
+          "config_setting": {
+            "commands": {
+              "01_download_key": {
+                "command": "wget http://s3.amazonaws.com/rds-downloads/rds-combined-ca-bundle.pem",
+                "cwd": "/tmp"
+              },
+              "02_set_etcd_key": {
+                "command": ""
+              },
+              "03_confd_write": {
+                "command": ""
+              }
+            }
+          }
+        }
+      },
+      "Properties": {
+        "ImageId": "ami-6154bb00",
+        "InstanceType": "t2.micro",
+        "KeyName": {
+          "Ref": "KeyPair"
+        }
+      },
+      "Type": "AWS::EC2::Instance"
+    }
+  },
+  "Outputs": {},
+  "AWSTemplateFormatVersion": "2010-09-09"
+}
